@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Calender</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192x192.png">
+  <link rel="apple-touch-icon" href="assets/icon-192x192.png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1a73e8">
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>function refreshLucideIcons(){if(window.lucide)lucide.createIcons()}</script>
+</head>
+<body>
+  <!-- Background Glow Orbs for Aurora Effect -->
+  <div class="glow-orb glow-orb-1"></div>
+  <div class="glow-orb glow-orb-2"></div>
+  <div class="glow-orb glow-orb-3"></div>
+
+  <div class="app-shell">
+    <header>
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">
+          <i data-lucide="calendar-days"></i>
+        </span>
+        <div>
+          <h1>Calender</h1>
+          <div id="viewTabs"></div>
+        </div>
+      </div>
+      <button id="themeToggle" class="theme-toggle" title="テーマ切替 (auto → light → dark)" aria-label="テーマ切替"></button>
+    </header>
+
+    <main id="appContent"></main>
+  <script defer src="main.dart.js"></script>
+</body>
+</html>

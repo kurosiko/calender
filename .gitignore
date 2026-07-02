@@ -1,0 +1,37 @@
+# ===== Nix =====
+result
+result-*
+.direnv/
+
+# ===== Dart =====
+.dart_tool/
+.packages
+pubspec.lock
+
+# ===== Dart ビルド成果物 (nix build で再生成する) =====
+web/main.dart.js
+web/main.dart.js.deps
+web/main.dart.js.map
+
+# ===== Node / Bun =====
+node_modules/
+bun.lockb
+
+# ===== OS / Editor =====
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+*.lock.bak
+
+# ===== 一時 / デバッグ =====
+*.tmp
+*.bak
+*.log
+
+# ===== デバッグ用 HTML (Nix flake 配布物からも除外) =====
+web/test_*.html
+web/dom_inspector.html
+web/iframe_test.html
+web/dev/

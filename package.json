@@ -1,0 +1,17 @@
+{
+  "name": "calender-dev",
+  "version": "1.0.0",
+  "description": "Dev environment for Dart Calendar App",
+  "main": "web/index.html",
+  "scripts": {
+    "build": "dart compile js web/main.dart -o web/main.dart.js",
+    "watch:dart": "nodemon --watch lib --watch web -e dart --exec \"npm run build\"",
+    "serve": "browser-sync start --server \"web\" --files \"web/*.js, web/*.css, web/*.html\"",
+    "dev": "concurrently \"npm run watch:dart\" \"npm run serve\""
+  },
+  "devDependencies": {
+    "browser-sync": "^3.0.2",
+    "concurrently": "^8.2.2",
+    "nodemon": "^3.1.0"
+  }
+}

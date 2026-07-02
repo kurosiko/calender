@@ -1,0 +1,10 @@
+name: calender
+description: A simple Dart schedule management app with monthly and weekly university class views.
+environment:
+  sdk: '>=2.18.0 <4.0.0'
+
+dependencies:
+  # No external dependencies required for this simple app.
+
+dev_dependencies:
+  # No dev dependencies.
