@@ -67,6 +67,184 @@ void log(String msg, {String level = 'info'}) { /* ... */ }
 
 ---
 
+## 起動からの動作フロー
+
+アプリが起動してから最初の画面が表示されるまでの流れを、一歩ずつ追ってみましょう。
+
+### 全体フロー図
+
+```
+ユーザーが web/index.html を開く
+          │
+          ▼
+  ┌───────────────────────────────────────┐
+  │ ① HTML の読み込み                       │
+  │   • styles.css を読み込む（テーマ色設定）│
+  │   • Lucide アイコンCDN を読み込む       │
+  │   • main.dart.js の実行開始             │
+  └───────────────────────────────────────┘
+          │
+          ▼
+  ┌───────────────────────────────────────┐
+  │ ② main() 関数が呼ばれる                 │
+  │   (web/main.dart のエントリポイント)     │
+  └───────────────────────────────────────┘
+          │
+          ▲              ▲              ▲
+          │              │              │
+  ┌───────┴──┐  ┌────────┴──────┐ ┌───┴──────────────┐
+  │③ スワイプ  │  │④ テーマ設定  │ │⑤ DB初期化と読込   │
+  │ 操作の準備 │  │              │ │                  │
+  │           │  │ localStorage │ │ IndexedDB を開く  │
+  │ onTouch   │  │ から前回の   │ │ ↓                │
+  │ Start/Move│  │ テーマを読込 │ │ 3ストアから       │
+  │ /End の   │  │ ↓            │ │ 全予定データを    │
+  │ リスナを  │  │ <html> に    │ │ リストに復元      │
+  │ 登録      │  │ data-theme   │ │                  │
+  │           │  │ 属性を設定   │ │ await で完了を    │
+  │           │  │              │ │ 待つ             │
+  └─────┬─────┘  └──────┬───────┘ └────────┬─────────┘
+        │               │                 │
+        └───────────────┼─────────────────┘
+                        │ 3つが完了したら次へ
+                        ▼
+          ┌───────────────────────────────────────┐
+          │ ⑥ 画面の初回描画                        │
+          │                                       │
+          │  renderCurrentPage()                  │
+          │  → currentPage の値 (初期値=0) を確認  │
+          │  → 0 なので renderMonthView() を呼ぶ   │
+          └───────────────────────────────────────┘
+                        │
+                        ▼
+          ┌───────────────────────────────────────┐
+          │ ⑦ renderMonthView()                  │
+          │                                       │
+          │  1. #appContent の中身を空にする        │
+          │  2. calendar-section を作る            │
+          │     ├ ヘッダー（◀ 2026年7月 ▶ ⚙ ☁）  │
+          │     └ renderCalendarGrid(年, 月)       │
+          │         ├ 7曜日のラベル行               │
+          │         ├ 空セルで曜日オフセット         │
+          │         └ 1日〜末日の全セル             │
+          │  3. schedule-section を作る            │
+          │     └ renderMonthlyEventSummary()     │
+          │         ├ 予定を日付でグループ化         │
+          │         ├ 今日以降の予定だけを列挙       │
+          │         └ 各予定をカード表示             │
+          └───────────────────────────────────────┘
+                        │
+                        ▼
+          ┌───────────────────────────────────────┐
+          │ ⑧ renderViewTabs()                   │
+          │                                       │
+          │  #viewTabs にタブを描画                │
+          │  [ 📅 月表示 ] [ 🕐 時間割 ]           │
+          │  現在 currentPage=0 なので月表示が     │
+          │  アクティブ（青くハイライト）           │
+          └───────────────────────────────────────┘
+                        │
+                        ▼
+          ┌───────────────────────────────────────┐
+          │ ⑨ refreshLucideIcons()               │
+          │                                       │
+          │  Lucide ライブラリに全 <i data-lucide> │
+          │  タグを SVG アイコンに置換させる        │
+          └───────────────────────────────────────┘
+                        │
+                        ▼
+              ┌─────────────────┐
+              │ 表示完了 🎉      │
+              │ 月表示カレンダー  │
+              │ が画面に出る     │
+              └─────────────────┘
+```
+
+### main() 関数のコードと各行の解説
+
+```dart
+// ❶ この関数がすべての起点。ブラウザが main.dart.js を読み込むと自動で呼ばれる
+void main() async {
+
+  // ❷ スワイプ操作の準備
+  //    スマホで左右にスワイプしたときのイベントリスナを登録する
+  //    onTouchStart: 指が触れたX座標を記録
+  //    onTouchMove:  左右方向の移動かどうか判定
+  //    onTouchEnd:   50px以上動いていたら月移動と判定
+  setupSwipeGestures();
+
+  // ❸ テーマ切替ボタンの準備
+  //    localStorage から前回のテーマ設定 ('auto'/'light'/'dark') を読み込み
+  //    <html> 要素の data-theme 属性に反映
+  //    #themeToggle ボタンにクリックリスナを登録（auto→light→dark→auto...）
+  setupThemeToggle();
+
+  // ❹ IndexedDB を初期化
+  //    CalendarAppDB という名前のデータベースを開く
+  //    バージョン番号を見て、初回なら3つの Object Store を作成
+  //    await = この処理が終わるまで次の行に進まない
+  await dbService.init();
+
+  // ❺ 保存データを読み込んでリストに復元
+  //    3つの Object Store から全レコードを取得
+  //    monthlyEvents, classSchedule, recurringSchedules に詰め直す
+  //    データがなければ空リストのまま進む
+  await dbService.loadAll();
+
+  // ❻ 現在のタブに応じた画面を描画
+  //    初期値 currentPage = 0 → renderMonthView() が呼ばれる
+  renderCurrentPage();
+
+  // ❼ ヘッダー内のタブバーを描画
+  //    [月表示] [時間割] の2タブ。月表示がアクティブ表示になる
+  renderViewTabs();
+}
+```
+
+### 各段階で使われる主なデータ
+
+| 段階 | 使うデータ / 関数 | 説明 |
+|---|---|---|
+| ② main() | — | エントリポイント |
+| ③ スワイプ | `onTouchStart/Move/End` | スマホ操作の受付開始 |
+| ④ テーマ | `localStorage['theme']`, `applyTheme()` | 前回のテーマを復元 |
+| ⑤ DB初期化 | `DatabaseService.init()` | IndexedDB に接続 |
+| ⑤ データ読込 | `DatabaseService.loadAll()` | 全予定を復元 |
+| ⑥ 画面判定 | `currentPage` (初期値=0) | どの画面を出すか |
+| ⑦ 月表示 | `renderMonthView()` | カレンダー＋予定一覧 |
+| ⑦ カレンダー | `renderCalendarGrid()` | 7列の日付グリッド |
+| ⑦ 予定一覧 | `renderMonthlyEventSummary()` | 日付ごとのイベント表示 |
+| ⑧ タブ | `renderViewTabs()` | ヘッダータブの表示 |
+| ⑨ アイコン | `refreshLucideIcons()` | SVGアイコンの置換 |
+
+### 画面切り替え時の流れ
+
+ボタンやスワイプで画面が切り替わる流れも同じパターンです。
+
+```
+ユーザー操作
+（タブクリック / 月移動 / 設定変更 / 予定追加 ...）
+        │
+        ▼
+  対応する関数が呼ばれる（switchToPage, adjustMonth, showSettingsDialog など）
+        │
+        ▼
+  必要ならデータを書き換える（monthlyEvents, recurringSchedules など）
+        │
+        ▼
+  必要なら dbService.saveAll() で IndexedDB に保存
+        │
+        ▼
+  renderMonthView() または renderClassWeekView() を呼んで画面を再描画
+        │
+        ▼
+  refreshLucideIcons() でアイコンを再描画
+```
+
+この「データ変更 → 保存 → 画面再描画」のサイクルが、アプリ全体で一貫して使われているパターンです。
+
+---
+
 ## ファイル1: `lib/schedule.dart` — 「予定」を表すデータ構造
 
 ### 2種類の予定データ
