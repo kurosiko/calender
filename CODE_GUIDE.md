@@ -443,6 +443,360 @@ String getEventCardClass(ScheduleEvent event) {
 
 ---
 
+## イベントハンドリング — 予定の登録・編集・削除
+
+このアプリには**予定を登録する経路が6つ**あります。どこからどうやって予定が作られるのか、それぞれの流れを見ていきましょう。
+
+### 全登録経路の一覧
+
+```
+予定を登録できる場所
+├─ ① カレンダーの日付セル          → showDayDetails → 手動追加フォーム / タイムラインドラッグ
+├─ ② タイムラインのドラッグ操作      → _showQuickAddDialog
+├─ ③ 日付詳細の予定新規作成フォーム  → renderAddEventForm
+├─ ④ 週間授業の空きコマ「+」ボタン  → showAddClassEventDialog
+├─ ⑤ 設定の固定スケジュール追加     → showSettingsDialog 内の新規追加
+└─ ⑥ 予定カードのクリック          → showEditEventDialog（既存予定の編集）
+```
+
+### ① カレンダーの日付セルをクリック
+
+```
+ユーザーがカレンダーの「15」をクリック
+                │
+                ▼
+    renderCalendarGrid 内の onClick が発火
+                │
+                ▼
+    showDayDetails(date, fixedEvents, manualEvents)
+                │
+                ▼
+    ┌───────────────────────────────────────┐
+    │ ボトムシートが開く                      │
+    │ ┌ ヘッダー: 「7月15日のタイムライン」 ✕ │
+    │ ├ 登録済みの予定（クリックで編集）       │
+    │ ├ タイムライン（ドラッグで新規追加可能）  │
+    │ └ 予定の新規作成フォーム                │
+    └───────────────────────────────────────┘
+```
+
+**実際のコード:**
+```dart
+// calendar-cell に onClick リスナを設定する部分
+cell.onClick.listen((_) {
+  // その日の固定予定（繰り返し）と手動予定を集めて showDayDetails に渡す
+  showDayDetails(date, fixedEvents, manualEvents);
+});
+```
+
+---
+
+### ② タイムラインのドラッグ操作で予定追加（最重要パス）
+
+タイムライン上でマウスをドラッグすると、その時間帯に予定が作れます。アプリで最も凝った操作です。
+
+```
+マウスダウン（タイムライン上の任意の位置）
+      │
+      ▼
+  interactionOverlay.onMouseDown 発火
+      │
+      ├→ e.offset.y からクリック位置の時刻を計算（15分単位に丸める）
+      ├→ dragStartMinutes に開始時刻を記録
+      ├→ dragEndMinutes = dragStartMinutes（初期値は同じ）
+      ├→ isDragging = true（ドラッグ中フラグを立てる）
+      └→ updateDragUI() を呼んで画面上に選択範囲を描画
+            │
+            ├→ drag-indicator（青い半透明の矩形）を表示
+            └→ drag-start-marker（開始時刻ラベル付き破線）を表示
+      │
+      ▼
+マウス移動（ドラッグ中）
+      │
+      ▼
+  interactionOverlay.onMouseMove 発火
+      │
+      ├→ isDragging が true か確認
+      ├→ e.offset.y から現在位置の時刻を計算
+      ├→ dragEndMinutes を更新
+      └→ updateDragUI() を再呼び出し → 選択範囲がリアルタイムに伸縮
+      │
+      ▼
+マウスアップ（ドラッグ終了）
+      │
+      ▼
+  document.onMouseUp 発火
+      │
+      ├→ isDragging = false
+      ├→ dragIndicator と dragStartMarker を非表示
+      │
+      ├→ startMin と endMin の小さい方を開始時刻、大きい方を終了時刻に
+      │   （上下どちらにドラッグしても正しく動作）
+      │
+      ├→ クリックだけ（startMin == endMin）の場合は自動で +60分
+      │   「1クリック = 1時間の予定」という親切設計
+      │
+      └→ _showQuickAddDialog(date, startMin, endMin) を呼ぶ
+            │
+            ▼
+      ┌─────────────────────────────────┐
+      │ _showQuickAddDialog の中身       │
+      │                                 │
+      │ タイトル入力欄                   │
+      │ 詳細入力欄                       │
+      │ カテゴリ選択（あなた/グループ/仕事/│
+      │            大学/プライベート）    │
+      │ アイコン選択（📝🍴✈️💼🎓🛒🏃🏠🎬📚│
+      │                                 │
+      │ [保存] ボタン押下                 │
+      │   ↓                             │
+      │ monthlyEvents.add(ScheduleEvent(│
+      │   title: title,                 │
+      │   description: fullDescription, │
+      │   date: 開始日時,                │
+      │   endDate: 終了日時,             │
+      │   icon: selectedIcon,           │
+      │ ))                              │
+      │   ↓                             │
+      │ dbService.saveAll() // DBに保存  │
+      │   ↓                             │
+      │ renderMonthView() // 画面再描画  │
+      │   ↓                             │
+      │ backdrop.remove() // 閉じる      │
+      └─────────────────────────────────┘
+```
+
+### 座標 → 時刻 の変換ロジック
+
+```dart
+// タイムラインのクリックY座標を受け取って「0:00からの経過分数」に変換する
+int getMinutesFromY(int localY) {
+  // ステップ1: Y座標 / 40px で「画面の上から何時間目か」を求める
+  final hourOffset = localY / hourHeight;          // 例: 380px ÷ 40 = 9.5時間目
+
+  // ステップ2: 分に変換
+  final totalMinutes = (hourOffset * 60).round();   // 例: 9.5 × 60 = 570分
+
+  // ステップ3: 15分単位にスナップ（丸める）
+  //   +7 → 15の倍数のちょうど真ん中で切り替わるようにする
+  //   ~/15 → 整数除算（小数点以下切り捨て）
+  //   *15  → 15分単位に戻す
+  final snappedMinutes = ((totalMinutes + 7) ~/ 15) * 15;  // 例: 577 ≈ 570
+
+  // ステップ4: 0時からの絶対分数を返す（0時以前はありえないが念のため）
+  return (startHour * 60) + snappedMinutes;
+}
+
+// 具体例: Y=380px をクリックした場合
+//   380 / 40 = 9.5時間目
+//   9.5 × 60 = 570分
+//   (570 + 7) / 15 = 38.46 → 38 (切り捨て)
+//   38 × 15 = 570 → 09:30 と判定
+```
+
+### 選択範囲の描画（updateDragUI）
+
+```dart
+void updateDragUI(int startMin, int endMin) {
+  // 小さい方を top（上端）、大きい方を bottom（下端）に
+  final minMin = startMin < endMin ? startMin : endMin;
+  final maxMin = startMin < endMin ? endMin : startMin;
+
+  // 画面上の位置と高さを計算
+  final topPos = (minMin - 0) * hourHeight / 60;     // 上端のpx位置
+  final heightVal = (maxMin - minMin) * hourHeight / 60; // 高さpx
+
+  // ドラッグ範囲の青い矩形を表示
+  dragIndicator.style.display = 'block';
+  dragIndicator.style.top = '${topPos}px';
+  dragIndicator.style.height = '${heightVal > 0 ? heightVal : 10}px'; // 最低10px
+
+  // 開始位置に破線と「開始 09:30」ラベルを表示
+  dragStartMarker.style.display = 'block';
+  dragStartMarker.style.top = '${startTopPos}px';
+  dragStartLabel.text = '開始 ${formatTime(startMin)}';
+}
+```
+
+---
+
+### ③ 日付詳細の予定新規作成フォーム（renderAddEventForm）
+
+タイムラインの下にある、ドラッグを使わずプルダウンで時間を選ぶフォームです。
+
+```
+renderAddEventForm(date)
+      │
+      ▼
+  タイトル入力欄（text）
+  詳細入力欄（textarea）
+  開始時刻プルダウン（6:00〜22:00、15分刻み）
+  終了時刻プルダウン（同上）
+  カテゴリ選択タグ（あなた/グループ/仕事/大学/プライベート）
+      │
+      ▼
+  [追加する] ボタン押下
+      │
+      ├→ 入力チェック（タイトル空チェック + 終了 > 開始チェック）
+      ├→ monthlyEvents.add(ScheduleEvent(...))
+      ├→ dbService.saveAll()
+      ├→ renderMonthView()
+      └→ 現在のボトムシートを閉じて、新しい showDayDetails を開く
+          （→ 追加した予定がすぐタイムラインに反映される）
+```
+
+### ④ 週間授業の空きコマ「+」ボタン
+
+```
+renderClassScheduleTable()
+      │
+      ├── 空きコマセルに empty-slot（+ ボタン）を描画
+      └── cell.onClick で showAddClassEventDialog(weekday, period) を呼ぶ
+                  │
+                  ▼
+          ┌─────────────────────────┐
+          │ showAddClassEventDialog  │
+          │                         │
+          │ 授業名（例: 線形代数）     │
+          │ 教室（例: 101教室）       │
+          │ メモ（任意）              │
+          │                         │
+          │ [時間割に追加]            │
+          │   ↓                     │
+          │ classSchedule.add(       │
+          │   ScheduleEvent(         │
+          │     title: "線形代数",    │
+          │     description: "3限: 101教室",│
+          │     weekday: 1, // 月曜  │
+          │     period: 3,  // 3限   │
+          │   ))                     │
+          │   ↓                     │
+          │ dbService.saveAll()      │
+          │   ↓                     │
+          │ renderClassWeekView()    │
+          │   ↓                     │
+          │ backdrop.remove()        │
+          └─────────────────────────┘
+```
+
+### ⑤ 設定の固定スケジュール追加
+
+```
+showSettingsDialog()
+      │
+      ▼
+  新規追加フォーム（設定パネル最下部）
+      │
+      ├→ タイトル入力
+      ├→ 説明入力
+      ├→ アイコン入力
+      ├→ 曜日プルダウン（月〜日）
+      ├→ 時間ピッカー（iOS風ホイール）
+      ├→ 分ピッカー（iOS風ホイール）
+      ├→ 週指定プルダウン（毎週/第1〜4週）
+      └→ アイコンのみ表示チェックボックス
+            │
+            ▼
+      [新規追加] ボタン押下
+            │
+            ├→ タイトル空チェック
+            ├→ recurringSchedules.add(RecurringSchedule(...))
+            │     ※ schedule.dart の RecurringSchedule クラスを追加
+            │     ※ この追加が次回の generateRecurringEvents で反映される
+            ├→ dbService.saveAll()
+            ├→ renderMonthView()
+            └→ 設定ダイアログを閉じて再オープン（追加済みの状態で）
+```
+
+### ⑥ 予定の編集と削除（showEditEventDialog）
+
+```
+予定カード or タイムラインブロック をクリック
+            │
+            ▼
+  showEditEventDialog(event)
+            │
+            ▼
+  ┌─────────────────────────────────────┐
+  │ 編集ダイアログ                       │
+  │                                     │
+  │ タイトル（既存の値が入っている）       │
+  │ 詳細・説明                           │
+  │ メモ（プライベートノート）             │
+  │                                     │
+  │ [保存する]                           │
+  │   ↓                                 │
+  │ イベントのプロパティを直接書き換え     │
+  │ event.title = newTitle               │
+  │ event.description = newDesc          │
+  │ event.note = newNote                 │
+  │   ↓                                 │
+  │ もし event.origin があれば           │
+  │ → 元の RecurringSchedule も更新    │
+  │ origin.title = newTitle             │
+  │ origin.note = newNote               │
+  │   ↓                                 │
+  │ dbService.saveAll()                  │
+  │ renderMonthView()                    │
+  │   ↓                                 │
+  │ 編集ダイアログを閉じて                 │
+  │ 同じ日のタイムラインを再表示            │
+  │                                     │
+  │ [予定を削除]（手動予定のみ表示）       │
+  │   ↓                                 │
+  │ monthlyEvents.remove(event)          │
+  │ dbService.saveAll()                  │
+  │ renderMonthView()                    │
+  └─────────────────────────────────────┘
+```
+
+### 編集時に RecurringSchedule も同期する仕組み
+
+```dart
+// showEditEventDialog の保存ボタン内の処理
+
+// ❶ 予定そのものを直接書き換える（参照なので元のリストに即反映）
+event.title = title;
+event.description = descInput.value?.trim() ?? '';
+event.note = memoInput.value?.trim();
+
+// ❷ もしこれが固定スケジュールから自動生成された予定なら
+//    origin（生成元の RecurringSchedule）も一緒に書き換える
+if (event.origin != null) {
+  event.origin!.title = title;         // 元の設定にもタイトルが反映される
+  event.origin!.description = desc;    // 説明も反映
+  event.origin!.note = memo;           // メモも反映
+}
+// → 次回 generateRecurringEvents() が呼ばれたとき、
+//   更新された設定から予定が再生成される
+```
+
+### コールバックの連鎖 — ダイアログを閉じて画面を戻すパターン
+
+アプリ内でよく使われる「ボトムシートAを閉じてボトムシートBを開く」パターンです。
+編集後のシームレスな画面遷移を実現しています。
+
+```
+showEditEventDialog で [保存する] クリック
+      │
+      ├→ 予定データを更新
+      ├→ dbService.saveAll()
+      ├→ renderMonthView()          ← メイン画面を再描画
+      ├→ backdrop.remove()           ← 編集ダイアログを閉じる
+      │
+      └→ もし event.date があるなら:
+            │
+            ├→ その日の fixedEvents と manualEvents を再計算
+            └→ showDayDetails(date, fixed, manual)
+                  │
+                  └→ 編集後のタイムラインが自動で再表示される
+
+// ユーザー視点では:
+// 「編集 → 保存 → 一瞬でタイムラインに戻る」のスムーズな体験
+```
+
+---
+
 ## タイムライン（1日の時間軸表示）
 
 日付のセルをクリックすると出てくる詳細画面の中心部分です。
